@@ -1,0 +1,120 @@
+Name: Ryan Bridges
+Email: rbridges@ucsd.edu
+FALL 2015
+
+
+sr_router.c
+    sr_handlepacket() Walkthrough:
+        This function checks the type of the incoming packet and calls the
+        corresponding function
+
+    handle_ip_packet() Walkthrough:
+        This function is called when an IP packet is received by the router. It
+        first checks if the packet is destined for one of its interfaces. If the
+        packet is for one of the router's interfaces, then it checks the type of
+        the packet. If the packet is anything other than ICMP type 8 (echo
+        request), then it is dropped, and an error message may be sent back. If
+        the packet is an ICMP echo request, then a ICMP echo reply is sent back.
+        If the packet is not destined for one of the router's interfaces, then
+        it is forwarded. Before forwarding the packet, the TTL is checked to
+        make sure that the packet can still travel another hop. Then, the LPM
+        algorithm is used to find a match for the destination address in the
+        router's routing table. If a match is not found, then the packet is
+        dropped and ICMP type0 code3 is sent  back. If a match is found, then
+        the ARP cache is checked for a MAC address that corresponds to the next
+        hop that was found via LPM. If no ARP entry is found, then the packet is
+        put onto a queue as it waits for an ARP reply. If both a valid next hop
+        IP address and a corresponding MAC address are found, then the packet is
+        sent along to its next hop.
+
+    send_custom_icmp_packet() Walkthrough:
+        This function is used throughout the program anytime an ICMP packet
+        needs to be sent. Since ICMP type 0 packets require that I send back the
+        data from the original packet, the length of an ICMP packet is set to
+        the length of packet in which it is a response to. If the packet is not
+        ICMP type 0, then it will not need additional payload data, so I make
+        the size equal to the total size of the required headers (eth+ip+icmp).
+        Then all of the proper fields are sent in the headers. Checksums are
+        calculated differently for ICMP type 0 packets, and ICMP type 0 packets
+        take extra data appended to the headers. There are conditionals in the
+        function that will take care of the special cases for type 0 packets.
+        The rest of the code is fairly straight forward, it simply sets the rest
+        of the fields in the headers, and then sends the packet by calling
+        sr_send_packet.
+
+    handle_arp_packet() Walkthrough:
+        This function is called when an ARP packet arrives at the router. It
+        first checks to see if the packet is ARP reply or an ARP request. If the
+        packet is an ARP request, then I check if the interface upon which it
+        was received has an address the corresponds to what the ARP request is
+        looking for. If the packet is not for the receiving interface, it is
+        dropped. If the packet is for the receiving interface, then the ethernet
+        source field is set to the MAC address of the receiving interface, while
+        the ethernet destination field is set to the original source MAC
+        address. The same is done for the address fields in the ARP header. Once
+        the ARP reply is constructed, it is sent via sr_send_packet. If the
+        incoming packet is an ARP reply, then I immediately check if there is an
+        ARP request waiting on the reply. If there is, then I cycle through all
+        of the packets that were waiting on the MAC address that this reply is
+        giving us, and I send out each one.
+
+    calculate_LPM Walkthrough:
+        This function is very simple. It uses the LPM algorithm to traverse the
+        routing table in search of a match for the passed in IP address. If a
+        match is found, then an sr_rt* is returned so that it can be used in the
+        caller.
+
+sr_utils.c
+    A few functions were added here that are used periodically to extract the
+    headers from packets. These are just for convenience.
+
+sr_if.c
+    2 methods were defined here which will return a matching interface on the
+    router given an ethernet address or an IP address.
+
+sr_arpcache.c
+    handle_arpreq() Walkthrough:
+        This function is called anytime I queue a new ARP request, and every
+        second by sr_arpcache_sweepreqs(). The function's primary purpose is to
+        send out ARP requests. The first thing it does is check if the request
+        that is about to be sent out has been sent out before in the last
+        second. It then checks if the request has already been sent out 5 times.
+        If this is the case, then ICMP type 3 code 1 packets are sent out for all
+        of the packets that are waiting on that request, and the request is
+        deleted. If the request has not been sent 5 times and it has been more
+        than 1 second since the last time it was sent, then an ARP packet is
+        constructed and sent out. The outgoing interface comes from the
+        interface associated with the first packet on the list of packets that
+        the request holds. This is because that interface  is the outgoing
+        interface that was retrieved from calculate_LPM in sr_router.c and
+        passed into sr_arpcache_queuereq. The destination IP address will come
+        from the ip field of the request. This was also set in sr_router.c when
+        sr_arpcache_queuereq was called because the next hop ip address was
+        passed in.
+
+
+Commentary:
+    Perhaps the most challenging part of this project for me was figuring out
+    how to send back ICMP packets after ARP requests had timed out 5 times. This
+    was  challenging because they need to be sent back the way they came.
+    Unfortunately, I do not have direct access to the interface that the packets
+    came in on in  sr_arpcache_sweepreqs or in handle_arpreq. I tried playing
+    with the parameters that  are passed into sr_arpcache_queuereq so that the
+    interface that the packets  arrived on could be accessible when I needed it.
+    But no combination of parameters was giving me quite what I needed. I
+    considered simply adding another field to sr_arpreq or sr_packet (this would
+    have been the easiest fix) but I was afraid  that adding a field would break
+    something. Even though I Was unable to find anything that indicated that
+    adding a field would cause a problem, I am not sure how this  program will
+    be tested, and I could have overlooked something because I did not write all
+    of the skeleton code myself from the ground up. Eventually, I settled on
+    using the destination MAC address from the original packet to lookup the
+    interface. However, this was questionable as well. In the comments for
+    sr_packet, it says that  the 'buf' will be a "a raw Ethernet frame,
+    presumably with the dest MAC empty." I cannot see how the dest MAC address
+    would ever be empty because 'buf' gets  copied directly from the original
+    packet that is passed into sr_arpcache_queuereq. That packet would need a
+    destination MAC address in order to arrive at my router. Unless that field
+    is explicitly set to 0 somewhere, there is no way that it could be blank.
+    So, this method should always work because my code never touches the
+    original packet, so it should be intact when I  need it again.
